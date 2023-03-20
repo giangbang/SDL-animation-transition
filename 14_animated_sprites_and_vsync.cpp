@@ -1,17 +1,33 @@
-/*This source code copyrighted by Lazy Foo' Productions (2004-2022)
+	/*This source code copyrighted by Lazy Foo' Productions (2004-2022)
 and may not be redistributed without written permission.*/
 
 //Using SDL, SDL_image, standard IO, and strings
-#include <SDL.h>
-#include <SDL_image.h>
+#if __linux__
+	#include <SDL2/SDL.h>
+	#include <SDL2/SDL_image.h>
+#else
+	#include <SDL.h>
+	#include <SDL_image.h>
+#endif
+
 #include <stdio.h>
 #include <string>
 #include <math.h>
 #include <iostream>
+#include <queue>
 
 //Screen dimension constants
 const int SCREEN_WIDTH = 640;
 const int SCREEN_HEIGHT = 480;
+
+using namespace std;
+
+enum States{
+	IDLE,
+	WALKING,
+	STANDING_UP,
+	SITING_DOWN,
+};
 
 //Texture wrapper class
 class LTexture
@@ -37,7 +53,7 @@ class LTexture
 
 		//Set alpha modulation
 		void setAlpha( Uint8 alpha );
-		
+
 		//Renders texture at given point
 		void render( int x, int y, SDL_Rect* clip = NULL );
 
@@ -73,6 +89,7 @@ SDL_Renderer* gRenderer = NULL;
 const int WALKING_ANIMATION_FRAMES = 4;
 SDL_Rect gSpriteClips[ WALKING_ANIMATION_FRAMES ];
 LTexture gSpriteSheetTexture;
+LTexture gSpriteSheetTransitionTexture;
 
 
 LTexture::LTexture()
@@ -153,7 +170,7 @@ void LTexture::setBlendMode( SDL_BlendMode blending )
 	//Set blending function
 	SDL_SetTextureBlendMode( mTexture, blending );
 }
-		
+
 void LTexture::setAlpha( Uint8 alpha )
 {
 	//Modulate texture alpha
@@ -263,7 +280,7 @@ bool loadMedia()
 		gSpriteClips[ 1 ].y =   0;
 		gSpriteClips[ 1 ].w =  64;
 		gSpriteClips[ 1 ].h = 205;
-		
+
 		gSpriteClips[ 2 ].x = 128;
 		gSpriteClips[ 2 ].y =   0;
 		gSpriteClips[ 2 ].w =  64;
@@ -274,7 +291,12 @@ bool loadMedia()
 		gSpriteClips[ 3 ].w =  64;
 		gSpriteClips[ 3 ].h = 205;
 	}
-	
+	if( !gSpriteSheetTransitionTexture.loadFromFile( "14_animated_sprites_and_vsync/foo_transition.png" ) )
+	{
+		printf( "Failed to load walking animation texture!\n" );
+		success = false;
+	}
+
 	return success;
 }
 
@@ -282,8 +304,9 @@ void close()
 {
 	//Free loaded images
 	gSpriteSheetTexture.free();
+	gSpriteSheetTransitionTexture.free();
 
-	//Destroy window	
+	//Destroy window
 	SDL_DestroyRenderer( gRenderer );
 	SDL_DestroyWindow( gWindow );
 	gWindow = NULL;
@@ -309,7 +332,7 @@ int main( int argc, char* args[] )
 			printf( "Failed to load media!\n" );
 		}
 		else
-		{	
+		{
 			//Main loop flag
 			bool quit = false;
 
@@ -318,8 +341,13 @@ int main( int argc, char* args[] )
 
 			//Current animation frame
 			int frame = 0;
-			
+
 			int current_x = (SCREEN_WIDTH - gSpriteClips[0].w ) / 2;
+			int current_state = IDLE;
+
+			// queue for rendering
+			queue<int> q;
+			q.push(current_state);
 
 			//While application is running
 			while( !quit )
@@ -333,27 +361,56 @@ int main( int argc, char* args[] )
 						quit = true;
 					} else if( e.type == SDL_KEYDOWN ) {
 						//Select surfaces based on key press
-                        switch( e.key.keysym.sym ) {
+            switch( e.key.keysym.sym ) {
 							case SDLK_LEFT:
 							current_x -= 5;
 							current_x = std::max(current_x, 0);
+							current_state = WALKING;
 							break;
 							case SDLK_RIGHT:
 							current_x += 5;
 							current_x = std::min(current_x, SCREEN_WIDTH);
+							current_state = WALKING;
 							break;
 						}
-					}
+					} else current_state = IDLE;
 				}
 
 				//Clear screen
 				SDL_SetRenderDrawColor( gRenderer, 0xFF, 0xFF, 0xFF, 0xFF );
 				SDL_RenderClear( gRenderer );
 
+				// update the current rendering States
+				if (q.front() != current_state && q.front() < STANDING_UP) {
+					int front = q.front();
+					q.pop();
+					if (front == IDLE) {
+						q.push(STANDING_UP);
+						q.push(WALKING);
+						frame = 0;
+					} else {
+						q.push(SITING_DOWN);
+						q.push(IDLE);
+						frame = 0;
+					}
+				}
+
 				//Render current frame
 				SDL_Rect* currentClip = &gSpriteClips[ frame / 4 ];
 
-				gSpriteSheetTexture.render( current_x, ( SCREEN_HEIGHT - currentClip->h ) / 2, currentClip );
+				if (q.front() == STANDING_UP) {
+					//Render current frame
+					currentClip = &gSpriteClips[ 3-frame / 4 ];
+					gSpriteSheetTransitionTexture.render( current_x, ( SCREEN_HEIGHT - currentClip->h ) / 2, currentClip );
+				} else if (q.front() == SITING_DOWN) {
+					gSpriteSheetTransitionTexture.render( current_x, ( SCREEN_HEIGHT - currentClip->h ) / 2, currentClip );
+				} else if (q.front() == IDLE) {
+					currentClip = &gSpriteClips[ 3 ];
+					gSpriteSheetTransitionTexture.render( current_x, ( SCREEN_HEIGHT - currentClip->h ) / 2, currentClip );
+				}
+				else {
+					gSpriteSheetTexture.render( current_x, ( SCREEN_HEIGHT - currentClip->h ) / 2, currentClip );
+				}
 
 				//Update screen
 				SDL_RenderPresent( gRenderer );
@@ -365,6 +422,11 @@ int main( int argc, char* args[] )
 				if( frame / 4 >= WALKING_ANIMATION_FRAMES )
 				{
 					frame = 0;
+				}
+
+				// update the end of transitioning
+				if (frame == 0 && q.front() >= STANDING_UP) {
+					q.pop();
 				}
 			}
 		}
